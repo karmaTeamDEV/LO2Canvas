@@ -1,52 +1,53 @@
 /*+===========================================================================
  ||
+ ||       Language:  Node.js
  ||
- ||         Author:  [Your Name]
+ ||        Version:  9.2.0
  ||
- ||        Purpose:  [A description of why this class exists.  For what
- ||                   reason was it written?  Which jobs does it perform?]
+ ||    Description:  API to fetch grades from LO and update it to Canvas.
+ ||                  Fetch all Courses, Assignmets, Students from Canvas.
+ ||                  Get access token from LO. 
+ ||                  Fetch all Courses and Gradebooks from LO using the access token.
+ ||                  Chek the Assignments of LO in Canvas. If not present create in Camvas. 
+ ||                  Update the Grades of LO in Canvas and update the Status.
  ||
- ||  Inherits From:  [If this class is a subclass of another, name it.
- ||                   If not, just say "None."]
- ||
- ||     Interfaces:  [If any predefined interfaces are implemented by
- ||                   this class, name them.  If not, ... well, you know.]
- ||
- |+-----------------------------------------------------------------------
- ||
- ||  Class [Class Name] 
- ||
- ||         Author:  [Your Name]
- ||
- ||        Purpose:  [A description of why this class exists.  For what
- ||                   reason was it written?  Which jobs does it perform?]
- ||
- ||  Inherits From:  [If this class is a subclass of another, name it.
- ||                   If not, just say "None."]
- ||
- ||     Interfaces:  [If any predefined interfaces are implemented by
- ||                   this class, name them.  If not, ... well, you know.]
+ ||    Source Path:  https://github.com/karmaTeamDEV/LO2Canvas.git
  ||
  |+-----------------------------------------------------------------------
  ||
- ||      Constants:  [Name all public class constants, and provide a very
- ||                   brief (but useful!) description of each.]
+ ||      Developer:  Biswa Panda / Padma Pradhan
+ ||
+ ||          Email:  biswa002@gmail.com / pradhan.padma@gmail.com 
+ ||
+ ||       Phone No:  +91-943 866 5655 / +91-700 890 2901
+ ||
+ ||           Date:  11/27/2017
  ||
  |+-----------------------------------------------------------------------
  ||
- ||   Constructors:  [List the names and arguments of all defined
- ||                   constructors.]
+ ||      Tested By:  Churchill Rout
  ||
- ||  Class Methods:  [List the names, arguments, and return types of all
- ||                   public class methods.]
+ ||          Email:  churchill.rout@gmail.com
  ||
- ||  Inst. Methods:  [List the names, arguments, and return types of all
- ||                   public instance methods.]
+ ||       Phone No:  +91-785 385 4946
+ ||
+ ||           Date:  11/28/2017
+ ||
+ |+-----------------------------------------------------------------------
+ ||
+ ||    Reviewed By:  Sonali Susmita / Manaw Modi
+ ||
+ ||          Email:  sonali.sushmita@gmail.com / manaw.modi@gmail.com 
+ ||
+ ||       Phone No:  +91-933 783 2497 / +91-943 703 2211
+ ||
+ ||           Date:  11/29/2017
  ||
  ++==========================================================================*/ 
 
 'use strict';
 
+// LOAD LIBRARIES
 var AWS = require("aws-sdk");
 var https = require('https');
 var request = require('request');
@@ -55,8 +56,10 @@ const uuidv1 = require('uuid/v1');
 var Promise = require('promise');
 var async = require("async");
 
+// SET REGION CONFIG
 AWS.config.update({region: 'us-east-2'});
 
+// SET GLOBAL VARIABLES
 var access_token = "";
 
 var LO_URL = "https://karma-test.difference-engine.com/";
@@ -68,10 +71,8 @@ var Canvas_Token = "3~9Y1aDtficzadsxwl8qKEnPf9OO3JFkVeeySn6fZV0R7n5MyuUjG19cXT7d
 var Batch_NO = uuidv1();
 var MsgNO = 1;
 
-
-
 console.log('Loading function');
-
+// START API FUNCTION handler. Run BY Default for AWS Lambda Function
 
 exports.handler = (event, context, callback) => {
 
@@ -104,7 +105,7 @@ function UpdateScoreLOtoCanvas(initialData) {
 
 
 
-// FUNCTION TO GET ALL THE COURSES FROM CANVAS
+// FUNCTION TO GET ALL THE COURSES FROM CANVAS. 
 
 function getCoursesFromCanvas(firstData) {
 
@@ -112,22 +113,20 @@ function getCoursesFromCanvas(firstData) {
 
     return new Promise(function (resolve, reject) {
 
-        //API CAL GET ALL COURSES FROM CANVAS
-        request({
+        request({ //API CAL GET ALL COURSES FROM CANVAS USING REQUEST LIBRARY
             url: Canvas_URL+'api/v1/courses?access_token='+Canvas_Token,
             method: 'GET',
             
-        }, function(err, res, body) {
-                
-            if (err) {
-                console.log("ERROR IN FETCH COURSE FROM CANVAS: "+err);
+        }, function(err, res, body) { // CALLBACK FUNCTION TO HANDEL RETURNS OF CANVAS API CALL
+            
+            if (err) { // IF GOT ERROR FROM CANVAS API CALL
                 insert_log_messages(MsgNO++, 'Error', 'Error In Fetching Courses from Canvas - '+err) ;
                 reject(err);
             }  
-            else{
+            else{ // IF GOT SCCUSS FROM CANVAS API CALL
                 
                 var Courses_from_Canvas = JSON.parse(res.body);
-                //console.log("Courses from Canvas:", Courses_from_Canvas);
+
                 insert_log_messages(MsgNO++, 'Success', Courses_from_Canvas.length+' Courses Fetched from Canvas') ;
 
                 // INSERT INTO CANVAS COURSE TABLE BY LOOP
@@ -137,8 +136,8 @@ function getCoursesFromCanvas(firstData) {
                     var insert_time = getCurrentDateTime();
                     var canvas_course_id = Courses_from_Canvas[c].id.toString();
                     var canvas_course_name = Courses_from_Canvas[c].name;
-                    //console.log(" msg_id = "+ msg_id +" msg_insert_time = "+msg_insert_time);
-                
+                    
+                    // CREATE DB OBJECT AND PARAMETERS FOR INSERT
                     var dynamodb = new AWS.DynamoDB();
                     var params = {
                             TableName:"int_lo_canvas_courses_from_canvas",
@@ -150,9 +149,9 @@ function getCoursesFromCanvas(firstData) {
                                 Batch: { S:Batch_NO}
                             }
                         };
-                     
+                     // INSERT TO DYNAMO DB
                     dynamodb.putItem(params, function(err, data) {
-                        //console.log("ERROR = "+ err);
+
                         if(err)
                         {
                             insert_log_messages(MsgNO++, 'Error', ' Not Inserted to Canvas Course table'+err) ;
@@ -164,7 +163,7 @@ function getCoursesFromCanvas(firstData) {
                     
                 }
                 insert_log_messages(MsgNO++, 'Success', c+' - Courses Inserted to Canvas Course table') ;
-
+                
                 resolve(Courses_from_Canvas);
                 //return access_token;
 
@@ -178,15 +177,17 @@ function getCoursesFromCanvas(firstData) {
 
 // FUNCTION TO GET ALL THE ACCESSMENT and STUDENTS BY COURSES FROM CANVAS
 function getAssignment_StudentsFromCanvas(AllCoursesfromCanvas) {
+
+    
     insert_log_messages(MsgNO++, 'Info', 'Start Fetching Accessment from Canvas') ;
+
     return new Promise(function (resolve, reject) {
-      //  console.log(AllCoursesfromCanvas);
 
         // START COURSE LOOP
         for(var c=0; c<AllCoursesfromCanvas.length; c++ )
         {
             var canvas_course_id = AllCoursesfromCanvas[c].id.toString();
-            console.log("COurseID START - "+canvas_course_id);
+
             // FETCH ASSIGNMENTS FOR COURSE CANVAS
             insert_log_messages(MsgNO++, 'Info', ' Start Fetching For CourseID-'+canvas_course_id) ;
             request({
@@ -727,7 +728,7 @@ function update_marks_in_Canvas(CourseID, AssignID, StudentID, Score){
     
                 }
     
-            });
+        });
        
     }
     
@@ -753,21 +754,21 @@ var updateCsvTableStatus = function(id_from_LOtable, status_val, callback) {
 
 // FUNCTION TO GET ACCESS TOKEN FROM LO
 function get_access_token_LO(initialData) {
-    //gets the data
-    //console.log('IN GET get_access_token_LO');
+
     insert_log_messages(MsgNO++, 'Info', 'Start Getting Access Token from LO') ;
-    return new Promise(function (resolve, reject) {
-        request({
+
+    return new Promise(function (resolve, reject) { // START PROMISE TO WAIT NEXT FUNCTION
+        request({ // CALL OAUTH API OF LO
             url: LO_URL+'oauth2/token?grant_type=client_credentials',
             method: 'POST',
-            auth: {
+            auth: { 
                 user: 'grade-sync',
                 pass: '3f7s-xnx9ydzm-uhdx'
             },
             form: {
                 'grant_type': 'client_credentials'
             }
-            }, function(err, res, body) {
+            }, function(err, res, body) { // CALLBACK FUNCTION TO HANDLE API RETURNS
                 
                 if (err) {
                     console.log("ERROR IN AUTH: "+err);
@@ -775,18 +776,16 @@ function get_access_token_LO(initialData) {
                     reject(err);
                 }  
                 else{
-                    console.log("Access Token:", res);
+
                     var json = JSON.parse(res.body);
                     access_token = json.access_token;
-                   // console.log("Access Token:", access_token);
-                    insert_log_messages(MsgNO++, 'Success', 'Got Access Token from LO') ;
+                    insert_log_messages(MsgNO++, 'Success', 'Got Access Token from LO - '+access_token) ;
                     resolve(access_token);
-                    //return access_token;
-
+;
                 }
         });
-    })
-       // console.log('IN END get_access_token_LO 2nd');
+    });
+
 }
 
 
@@ -795,7 +794,7 @@ function get_access_token_LO(initialData) {
 // FUNCTIONS TO INSERT ALL LOG MESSAGES
 function insert_log_messages(msg_no_int, msg_type, msg_details)
 {
-    //console.log(" START IN INSERT MESSAGE");
+    console.log('Log No '+msg_no_int+'-'+msg_details );
 
     var msg_id = uuidv1();
     var msg_insert_time = getCurrentDateTime();
@@ -817,42 +816,39 @@ function insert_log_messages(msg_no_int, msg_type, msg_details)
         };
      
     dynamodb.putItem(params, function(err, data) {
-        //console.log("ERROR = "+ err);
+
         if(err)
         {
-            insert_log_messages(MsgNO++, 'Error', ' Not Inserted to log message table'+err) ;
-            
+            console.error("Not Inserted to log message table. Error JSON:", JSON.stringify(err, null, 2));
         }
-        //console.log("DATA = "+ data);
-    });
 
-    //console.log("END IN INSERT MESSAGE");
+    });
     
 }
 
 function getCurrentDateTime() {
     
-        var date = new Date();
+    var date = new Date();
+
+    var hour = date.getHours();
+    hour = (hour < 10 ? "0" : "") + hour;
+
+    var min  = date.getMinutes();
+    min = (min < 10 ? "0" : "") + min;
+
+    var sec  = date.getSeconds();
+    sec = (sec < 10 ? "0" : "") + sec;
+
+    var year = date.getFullYear();
+
+    var month = date.getMonth() + 1;
+    month = (month < 10 ? "0" : "") + month;
+
+    var day  = date.getDate();
+    day = (day < 10 ? "0" : "") + day;
+
+    return year + ":" + month + ":" + day + ":" + hour + ":" + min + ":" + sec;
     
-        var hour = date.getHours();
-        hour = (hour < 10 ? "0" : "") + hour;
-    
-        var min  = date.getMinutes();
-        min = (min < 10 ? "0" : "") + min;
-    
-        var sec  = date.getSeconds();
-        sec = (sec < 10 ? "0" : "") + sec;
-    
-        var year = date.getFullYear();
-    
-        var month = date.getMonth() + 1;
-        month = (month < 10 ? "0" : "") + month;
-    
-        var day  = date.getDate();
-        day = (day < 10 ? "0" : "") + day;
-    
-        return year + ":" + month + ":" + day + ":" + hour + ":" + min + ":" + sec;
-    
-    }
+}
 
 
