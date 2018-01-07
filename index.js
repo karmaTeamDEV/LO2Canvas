@@ -51,32 +51,70 @@
 var AWS = require("aws-sdk");
 var https = require('https');
 var request = require('request');
+var express = require('express');
 var CSV = require('comma-separated-values');
 const uuidv1 = require('uuid/v1');
 var Promise = require('promise');
 var async = require("async");
 
+var router = express.Router();
+var Redshift = require('node-redshift');
+
+
 // SET REGION CONFIG
-AWS.config.update({region: 'us-east-2'});
+//AWS.config.update({region: 'us-east-1'});
 
 // SET GLOBAL VARIABLES
 var access_token = "";
 
-var LO_URL = "https://karma-test.difference-engine.com/";
+var LO_URL = "" ;
+var LO_USRID = "" ;
+var LO_PASS = "" ;
 
-var Canvas_URL = "https://learningobjects.instructure.com/";
-var Canvas_Token = "3~9Y1aDtficzadsxwl8qKEnPf9OO3JFkVeeySn6fZV0R7n5MyuUjG19cXT7dqU9KHz";
+var Canvas_URL = "" ;
+var Canvas_Token = "";
 
+var start_cours_no = 0;
 
 var Batch_NO = uuidv1();
 var MsgNO = 1;
+
+var redshiftClient;
+var options;
+var res;
+
+var clientConfiguration = {
+    user: "karma",
+    database: "lo2bb",
+    password: "Arcman.1",
+    port: 5439,
+    host: "lo.cuj89sxvybd2.us-east-2.redshift.amazonaws.com",
+  };
+  
+
 
 console.log('Loading function');
 // START API FUNCTION handler. Run BY Default for AWS Lambda Function
 
 exports.handler = (event, context, callback) => {
 
+    LO_URL  = event.lourl;
+    LO_USRID = event.louserid;
+    LO_PASS = event.lopwd;
+    
+    Canvas_URL= event.canvasurl ;
+    Canvas_Token= event.canvastoken;
+
+    start_cours_no= event.start_cours_no;
+    
+    //callback(null, "LO_URL_GOT = "+LO_URL+" canvas_URL_GOT =  "+Canvas_URL+" EVENT = "+JSON.stringify(event));
+
     insert_log_messages(MsgNO++, 'Info', 'Start') ;
+    
+    // CONNECT TO REDSHIFT
+    redshiftClient = new Redshift(clientConfiguration);
+    options = {raw: true};
+
     
     UpdateScoreLOtoCanvas('Start').then(function (LOCanvasUpdateFunction) {
 
@@ -112,6 +150,8 @@ function getCoursesFromCanvas(firstData) {
     insert_log_messages(MsgNO++, 'Info', 'Start Fetching Courses from Canvas') ;
 
     return new Promise(function (resolve, reject) {
+        console.log("Canvas_URL = "+Canvas_URL);
+        console.log("Canvas_Token = "+Canvas_Token);
 
         request({ //API CAL GET ALL COURSES FROM CANVAS USING REQUEST LIBRARY
             url: Canvas_URL+'api/v1/courses?access_token='+Canvas_Token,
@@ -129,40 +169,42 @@ function getCoursesFromCanvas(firstData) {
 
                 insert_log_messages(MsgNO++, 'Success', Courses_from_Canvas.length+' Courses Fetched from Canvas') ;
 
+                // CONNECT TO REDSHIFT
+               // redshiftClient = new Redshift(clientConfiguration);
+              //  options = {raw: true};
+                var no_of_course_canvas = 1;
                 // INSERT INTO CANVAS COURSE TABLE BY LOOP
-                for(var c=0; c<Courses_from_Canvas.length; c++ )
-                {
+                async.forEachOf(Courses_from_Canvas, function (one_course, i, callback) {
+                  
                     var p_id = uuidv1();
                     var insert_time = getCurrentDateTime();
-                    var canvas_course_id = Courses_from_Canvas[c].id.toString();
-                    var canvas_course_name = Courses_from_Canvas[c].name;
-                    
-                    // CREATE DB OBJECT AND PARAMETERS FOR INSERT
-                    var dynamodb = new AWS.DynamoDB();
-                    var params = {
-                            TableName:"int_lo_canvas_courses_from_canvas",
-                            Item:{
-                                id : { S:p_id},
-                                courseid : { S:canvas_course_id},
-                                name : { S:canvas_course_name},
-                                InserTime : { S:insert_time},
-                                Batch: { S:Batch_NO}
-                            }
-                        };
-                     // INSERT TO DYNAMO DB
-                    dynamodb.putItem(params, function(err, data) {
 
-                        if(err)
+                    var canvas_course_id = one_course.id.toString();
+                    var canvas_course_name = one_course.name;
+
+                    var queryStr = "INSERT INTO int_lo_canvas_courses_from_canvas (canvas_course_name, canvas_course_id, upload_session)  VALUES ( '"+canvas_course_name+"', '"+canvas_course_id+"', '"+Batch_NO+"' );"
+                   
+
+                    // execute query and invoke callback...
+                    redshiftClient.query(queryStr, options, function(error, result) {
+                        if(error)
                         {
-                            insert_log_messages(MsgNO++, 'Error', ' Not Inserted to Canvas Course table'+err) ;
-                            reject(err);
+                            var errMsg = "Error Code: " + error.code + " ; Error Severity: " + error.severity + "; Message: " + error.message;
+                            //console.log (errMsg)
+                            insert_log_messages(MsgNO++, 'Error', 'Could not insert into int_lo_canvas_courses_from_canvas. Error return from DB = '+errMsg) ;
+                           // reject(errMsg);
                         }
-                        //console.log("DATA = "+ data);
+                        else{
+                            no_of_course_canvas = no_of_course_canvas+1;
+                        }
+
                     });
-                    
-                    
-                }
-                insert_log_messages(MsgNO++, 'Success', c+' - Courses Inserted to Canvas Course table') ;
+                
+                    callback();
+
+                });
+
+                insert_log_messages(MsgNO++, 'Success', no_of_course_canvas+' - Courses Inserted to Canvas Course table (int_lo_canvas_courses_from_canvas) ') ;
                 
                 resolve(Courses_from_Canvas);
                 //return access_token;
@@ -179,7 +221,7 @@ function getCoursesFromCanvas(firstData) {
 function getAssignment_StudentsFromCanvas(AllCoursesfromCanvas) {
 
     
-    insert_log_messages(MsgNO++, 'Info', 'Start Fetching Accessment from Canvas') ;
+    insert_log_messages(MsgNO++, 'Info', 'Start Fetching Accessment and Students from Canvas') ;
 
     return new Promise(function (resolve, reject) {
 
@@ -207,48 +249,45 @@ function getAssignment_StudentsFromCanvas(AllCoursesfromCanvas) {
 
                     insert_log_messages(MsgNO++, 'Success', Assignments_from_Canvas_by_Course.length+' Assignments Fetched from Canvas For CourseID-'+canvas_course_id) ;
     
+
+                    var no_of_assignment_canvas = 1;
                     // INSERT INTO CANVAS ASSIGNMENTS TABLE BY LOOP
-                    for(var a=0; a<Assignments_from_Canvas_by_Course.length; a++ )
-                    {
-                        var p_id = uuidv1();
-                        var insert_time = getCurrentDateTime();
-                        var canvas_assign_id = Assignments_from_Canvas_by_Course[a].id.toString();
-                        var canvas_assign_name = Assignments_from_Canvas_by_Course[a].name;
-                        var canvas_assign_course_id = Assignments_from_Canvas_by_Course[a].course_id.toString();
-                        //console.log(" msg_id = "+ msg_id +" msg_insert_time = "+msg_insert_time);
+                    async.forEachOf(Assignments_from_Canvas_by_Course, function (one_assingment, i, callback) {
+                  
+                        var canvas_assign_id = one_assingment.id.toString();
+                        var canvas_assign_name = one_assingment.name;
+                        var canvas_assign_course_id = one_assingment.course_id.toString();
+
+                        var queryStr = "INSERT INTO int_lo_canvas_assignments_of_course_from_canvas (course_id, assign_id, assign_name, upload_session)  VALUES ( '"+canvas_assign_course_id+"', '"+canvas_assign_id+"', '"+canvas_assign_name+"', '"+Batch_NO+"' );"
                     
-                        var dynamodb = new AWS.DynamoDB();
-                        var params = {
-                                TableName:"int_lo_canvas_assignments_of_course_from_canvas",
-                                Item:{
-                                    id : { S:p_id},
-                                    assignid : { S:canvas_assign_id},
-                                    courseid : { S:canvas_assign_course_id},
-                                    name : { S:canvas_assign_name},
-                                    InserTime : { S:insert_time},
-                                    Batch: { S:Batch_NO}
-                                }
-                            };
-                         
-                        dynamodb.putItem(params, function(err, data) {
-                            //console.log("ERROR = "+ err);
-                            if(err)
+
+                        // execute query and invoke callback...
+                        redshiftClient.query(queryStr, options, function(error, result) {
+                            if(error)
                             {
-                                insert_log_messages(MsgNO++, 'Error', ' Not Inserted to Canvas Assignment table'+err) ;
-                                reject(err);
+                                var errMsg = "Error Code: " + error.code + " ; Error Severity: " + error.severity + "; Message: " + error.message;
+                                //console.log (errMsg)
+                                insert_log_messages(MsgNO++, 'Error', 'Could not insert into int_lo_canvas_assignments_of_course_from_canvas. Error return from DB = '+errMsg) ;
+                            // reject(errMsg);
                             }
-                            //console.log("DATA = "+ data);
+                            else{
+                                no_of_assignment_canvas = no_of_assignment_canvas+1;
+                            }
+
                         });
-                        
-                        
-                    }
-                    //insert_log_messages(MsgNO++, 'Success', a+' - Courses Inserted to Canvas Course table') ;
+                    
+                        callback();
+
+                    });
+
+
+                insert_log_messages(MsgNO++, 'Success', no_of_assignment_canvas+' - Assignments Inserted to Canvas Assignment table (int_lo_canvas_assignments_of_course_from_canvas) ') ;
     
                     
                     //return access_token;
     
                 }
-            });
+        });
 
             
     
@@ -270,62 +309,56 @@ function getAssignment_StudentsFromCanvas(AllCoursesfromCanvas) {
 
                     insert_log_messages(MsgNO++, 'Success', Students_from_Canvas_by_Course.length+' Students Fetched from Canvas For CourseID-'+canvas_course_id) ;
     
-                    // INSERT INTO CANVAS ASSIGNMENTS TABLE BY LOOP
-                    for(var s=0; s<Students_from_Canvas_by_Course.length; s++ )
-                    {
-                        var p_id = uuidv1();
-                        var insert_time = getCurrentDateTime();
-                        var canvas_student_id = Students_from_Canvas_by_Course[s].user.id.toString();
-                        var canvas_student_name = Students_from_Canvas_by_Course[s].user.name;
-                        var canvas_student_email = Students_from_Canvas_by_Course[s].user.login_id;
-                        var canvas_student_courseid = Students_from_Canvas_by_Course[s].course_id.toString();
-                        //console.log(" msg_id = "+ msg_id +" msg_insert_time = "+msg_insert_time);
-                    
-                        var dynamodb = new AWS.DynamoDB();
-                        var params = {
-                                TableName:"int_lo_canvas_students_from_canvas",
-                                Item:{
-                                    id : { S:p_id},
-                                    enrollid : { S:canvas_student_id},
-                                    login_id : { S:canvas_student_email},
-                                    courseid : { S:canvas_student_courseid},
-                                    name : { S:canvas_student_name},
-                                    InserTime : { S:insert_time},
-                                    Batch: { S:Batch_NO}
-                                }
-                            };
-                         
-                        dynamodb.putItem(params, function(err, data) {
-                            //console.log("ERROR = "+ err);
-                            if(err)
+                    var no_of_students_canvas = 1;
+                    // INSERT INTO CANVAS STUDENT TABLE BY LOOP
+                    async.forEachOf(Students_from_Canvas_by_Course, function (one_student, i, callback) {
+                  
+                        var canvas_student_id = one_student.user.id.toString();
+                        var canvas_student_name = one_student.user.name;
+                        var canvas_student_email = one_student.user.login_id;
+                        var canvas_student_courseid = one_student.course_id.toString();
+
+
+                        var queryStr = "INSERT INTO int_lo_canvas_students_from_canvas (course_id, student_id, student_name, student_email, upload_session) VALUES ( '"+canvas_student_courseid+"', '"+canvas_student_id+"', '"+canvas_student_name+"', '"+canvas_student_email+"', '"+Batch_NO+"' );"
+                        // execute query and invoke callback...
+                        redshiftClient.query(queryStr, options, function(error, result) {
+                            if(error)
                             {
-                                insert_log_messages(MsgNO++, 'Error', ' Not Inserted to Canvas Student table'+err) ;
-                                reject(err);
+                                var errMsg = "Error Code: " + error.code + " ; Error Severity: " + error.severity + "; Message: " + error.message;
+                                //console.log (errMsg)
+                                insert_log_messages(MsgNO++, 'Error', 'Could not insert into int_lo_canvas_students_from_canvas. Error return from DB = '+errMsg) ;
+                            // reject(errMsg);
                             }
-                            //console.log("DATA = "+ data);
+                            else{
+                                no_of_students_canvas = no_of_students_canvas+1;
+                            }
+
                         });
-                        
-                        
-                    }
-                    //insert_log_messages(MsgNO++, 'Success', a+' - Courses Inserted to Canvas Course table') ;
-    
                     
-                    //return access_token;
+                        callback();
+
+                    });
+
+
+                insert_log_messages(MsgNO++, 'Success', no_of_students_canvas+' - Students Inserted to Canvas Student table (int_lo_canvas_students_from_canvas) ') ;
+
+
+
     
                 }
             });
 
             
     
-            insert_log_messages(MsgNO++, 'Info', ' End Fetching For CourseID-'+canvas_course_id) ;
-            console.log("COurseID END - "+canvas_course_id);
+            insert_log_messages(MsgNO++, 'Info', ' End Fetching Assignments and Students For CourseID-'+canvas_course_id) ;
 
 
         }
        // reject(AllCoursesfromCanvas);
        // callback(null, dataFromGetDataFunction) ;
+
+       insert_log_messages(MsgNO++, 'Info', 'End of Fetching All Assignments and Students from Canvas') ;
        resolve(AllCoursesfromCanvas);
-        console.log('END getAssignment_StudentsFromCanvas FUNCTION');
     })
 }
 
@@ -338,7 +371,7 @@ function get_all_courses_from_LO(access_token_from_lo) {
 
     return new Promise(function (resolve, reject) {
         request({
-            url: LO_URL+'api/v2/courses;limit=100;offset=0',
+            url: LO_URL+'api/v2/courses;limit=100;offset='+start_cours_no,
             auth: {
                 'bearer': access_token_from_lo
             }
@@ -375,22 +408,18 @@ function get_score_for_courses_LO(Courses_from_LO) {
 
             var LO_Course_id = Courses_from_LO[cn].id.toString() ;
             var LO_Course_Name = Courses_from_LO[cn].courseName ;
-
-            console.log("SENd - "+LO_Course_id);
-           
+          // if(LO_Course_id == "360943816")
+          // {
             insert_data_to_csv_import_table(LO_Course_id, LO_Course_Name) ;
+         //  }
 
-            setTimeout(function() {
-                console.log("SENd - "+LO_Course_Name);
-                 }, 1000);
-        
             
         }
 
       // callback();
       setTimeout(function() {
         resolve('1');
-         }, 5000);
+         }, 1000);
        // resolve('1');
 
 
@@ -400,9 +429,8 @@ function get_score_for_courses_LO(Courses_from_LO) {
 
 function insert_data_to_csv_import_table(param_course_id, param_course_name)
 {
-    console.log("GOT - "+param_course_id);
-    console.log("GOT - "+param_course_name);
 
+    
     var gradebook_data = { 
         "userOrder": [
             { "property": "familyName", "direction": "ASC" },
@@ -423,8 +451,8 @@ function insert_data_to_csv_import_table(param_course_id, param_course_name)
         }, function(errAPI, resAPI) {
 
             if (errAPI) {
-                console.log("ERROR IN FETCH GRADEBOOK = "+errAPI);
-                insert_log_messages(MsgNO++, 'Error', 'Error In Fetching GRADEBOOK from LO - '+errAPI) ;
+                //console.log("ERROR IN FETCH GRADEBOOK = "+errAPI);
+                insert_log_messages(MsgNO++, 'Error', 'Error In Fetching GRADEBOOK from LO - '+JSON.stringify(errAPI)) ;
                 reject(errAPI);
             }  
             else{
@@ -465,10 +493,18 @@ function insert_data_to_csv_import_table(param_course_id, param_course_name)
                         // console.log(assignment_mark);
                         // console.log(insert_time);
                         // console.log(Batch_NO);
+                        if(assignment_name == '')
+                            assignment_name = 'NULL'
+                        if(LO_student_email_id == '')
+                            LO_student_email_id = 'NULL'
+                        if(LO_student_family_name == '')
+                            LO_student_family_name = 'NULL'
+                        if(LO_student_given_name == '')
+                            LO_student_given_name = 'NULL'
 
                     if(assignment_mark != '' && last4Assign != '(NC)')
                     {
-                        var dynamodb = new AWS.DynamoDB();
+                        
                         var params = {
                                 TableName:"int_lo_canvas_student_list_from_csv_import",
                                 Item:{
@@ -486,16 +522,7 @@ function insert_data_to_csv_import_table(param_course_id, param_course_name)
                                 }
                             };
                             
-                        dynamodb.putItem(params, function(err, data) {
-                            //console.log("ERROR = "+ err);
-                            if(err)
-                            {
-                            console.log(param_course_id+" - COURSEID Not Inserted to LO student GradeBook table - "+ err);
-                                insert_log_messages(MsgNO++, 'Error', ' Not Inserted to LO student GradeBook table COURSEID - '+param_course_id+' - '+err) ;
-                                
-                            }
-                            //console.log("DATA = "+ data);
-                        });
+                        insert_into_db(params) ;
                     }
 
                     }
@@ -510,11 +537,25 @@ function insert_data_to_csv_import_table(param_course_id, param_course_name)
 
 }
 
+function insert_into_db(table_param)
+{
+    var dynamodb = new AWS.DynamoDB();
+    dynamodb.putItem(table_param, function(err, data) {
+        //console.log("ERROR = "+ err);
+        if(err)
+        {
+            insert_log_messages(MsgNO++, 'Error', " Not Inserted to  table ("+ table_param.TableName+") - ERROR === "+ err+"   PARAMETERE ==="+ JSON.stringify(table_param));
 
+        }
+        //console.log("DATA = "+ data);
+    });
+}
 
 function update_marks_to_Canvas(dataFromLOCourseInsert)
 {
+   var no_of_assignment_update = 0;
     console.log("IN UPDATE FUNCTION START");
+return new Promise(function (resolve, reject) {
     // FETCH ALL ROWS FROM LO TABLE
     var docClient = new AWS.DynamoDB.DocumentClient();
         
@@ -547,7 +588,7 @@ function update_marks_to_Canvas(dataFromLOCourseInsert)
               var assign_from_LOtable = one_row.Assign_Name;
               var score_from_LOtable = one_row.Mark;
               
-                console.log(Course_name_from_LOtable);
+              //  console.log(Course_name_from_LOtable);
 
                 // CHECK COURSE IN CANVAS COURSE TABLE
                 var params_for_course_canvas = {
@@ -563,7 +604,7 @@ function update_marks_to_Canvas(dataFromLOCourseInsert)
                     if (err) {
                         console.error("Unable to read item from Canvas Course Table. Error JSON:", JSON.stringify(err, null, 2));
                     } else {  
-                        console.log(dataCanvas);
+                        //console.log(dataCanvas);
                         if(dataCanvas.Items != ''){
                             var got_canvas_courseID = dataCanvas.Items[0].courseid ;
                             
@@ -582,7 +623,7 @@ function update_marks_to_Canvas(dataFromLOCourseInsert)
                                 if (err) {
                                     console.error("Unable to read item from Canvas Student Table. Error JSON:", JSON.stringify(err, null, 2));
                                 } else { 
-                                    console.log(dataCanvasStudent);
+                                    //console.log(dataCanvasStudent);
                                     
                                     if( dataCanvasStudent.Items != ''){
                                         var get_Canvas_student_ID = dataCanvasStudent.Items[0].enrollid
@@ -606,20 +647,24 @@ function update_marks_to_Canvas(dataFromLOCourseInsert)
                                             if (err) {
                                                 console.error("Unable to read item from Assignment Table. Error JSON:", JSON.stringify(err, null, 2));
                                             } else {
-                                                console.log("ASSIGNMENT - "+dataCanvasAssign)
+                                               // console.log("ASSIGNMENT GOT FROM TABLE - "+dataCanvasAssign)
                                                 if(dataCanvasAssign.Items != ""){
-                                                    console.log("To update Enroll ID"+get_Canvas_student_ID) ;
+                                                 //   console.log("To update Enroll ID"+get_Canvas_student_ID) ;
                                                     var get_Canvas_Assign_ID = dataCanvasAssign.Items[0].assignid
+
+                                                    // UPDATE MARKS IN CANVAS
+                                                    update_marks_in_Canvas(got_canvas_courseID, get_Canvas_Assign_ID, get_Canvas_student_ID, score_from_LOtable)
                                                     
                                                 }
                                                 else{
-                                                    console.log("No AssignMent");
-                                                    var get_Canvas_Assign_ID = create_assignment_in_Canvas(got_canvas_courseID, assign_from_LOtable, 100) ;
+                                                    console.log("No AssignMent FOUND FOR NAME == "+assign_from_LOtable);
+                                                    var get_Canvas_Assign_ID = create_assignment_in_Canvas(got_canvas_courseID, assign_from_LOtable, 100, get_Canvas_student_ID, score_from_LOtable) ;
                                                 }
 
-                                                // UPDATE MARKS IN CANVAS
-                                                update_marks_in_Canvas(got_canvas_courseID, get_Canvas_Assign_ID, get_Canvas_student_ID, score_from_LOtable)
                                                 
+                                                
+                                               
+                                                no_of_assignment_update = no_of_assignment_update+1;
                                                 setTimeout(function() {
                                                     console.log("SEND TO UPDATE - ");
                                                      }, 1000);
@@ -647,20 +692,22 @@ function update_marks_to_Canvas(dataFromLOCourseInsert)
                 callback();
             });
 
-
+            resolve(no_of_assignment_update+" - Assignnents Updated.") ;
         }
     });
 
     console.log("IN UPDATE FUNCTION END");
-
+   
+    
+});
 } 
 
 // FUNCTION TO CREATE ASSIGNMENTS IN CANVAS
 
-function create_assignment_in_Canvas(CourseID, name, points_possible){
+function create_assignment_in_Canvas(CourseID, name, points_possible, get_Canvas_student_ID, score_from_LOtable){
     
-        console.log("In Update Mark PUT - CourseID"+CourseID+" - AssignID -"+AssignID+" - StudentID ="+StudentID+" Score - "+Score);
-    
+        console.log("START CREATE ASSIGNMENT - CourseID"+CourseID+" - AssignmentNAME -"+name+"  Score - "+points_possible);
+
         var assignData = {
             "assignment[name]": name,
             "assignment[points_possible]": points_possible,
@@ -674,7 +721,7 @@ function create_assignment_in_Canvas(CourseID, name, points_possible){
                         'bearer': Canvas_Token
                     },
                 form: assignData
-            }, function(errAPI, resAPI) {
+            }, function(errAPI, resAPI, body) {
                 if (errAPI) {
                     console.log("ERROR IN CREATING ASSIGNMENT TO CANVAS: "+errAPI);
                     insert_log_messages(MsgNO++, 'Error', 'Assignments not created in canvas - '+errAPI) ;
@@ -682,12 +729,16 @@ function create_assignment_in_Canvas(CourseID, name, points_possible){
                 }  
                 else{
                     
-                    var json_create_assign = JSON.stringify(resAPI);
+                    var json_create_assign = JSON.parse(resAPI.body);
                    
-                    console.log("Create Assignment Return - "+json_create_assign );
+                    console.log("Create Assignment Return - "+json_create_assign  );
+                    console.log("Create Assignment ID  - "+json_create_assign.id  );
                     // resolve(json_update_mark);
-                    return resAPI.id;
-    
+                    
+                    // UPDATE MARKS IN CANVAS
+                    update_marks_in_Canvas(CourseID, json_create_assign.id, get_Canvas_student_ID, score_from_LOtable);
+
+                    return json_create_assign.id;
                 }
     
             });
@@ -762,8 +813,8 @@ function get_access_token_LO(initialData) {
             url: LO_URL+'oauth2/token?grant_type=client_credentials',
             method: 'POST',
             auth: { 
-                user: 'grade-sync',
-                pass: '3f7s-xnx9ydzm-uhdx'
+                user: LO_USRID,
+                pass: LO_PASS
             },
             form: {
                 'grant_type': 'client_credentials'
@@ -776,11 +827,16 @@ function get_access_token_LO(initialData) {
                     reject(err);
                 }  
                 else{
+                    if(res.statusCode == 200){
+                        var json = JSON.parse(res.body);
+                        access_token = json.access_token;
+                        insert_log_messages(MsgNO++, 'Success', 'Got Access Token from LO - '+access_token) ;
+                        resolve(access_token);
+                    }
+                    else{
+                        reject('Status Code = '+res.statusCode);
 
-                    var json = JSON.parse(res.body);
-                    access_token = json.access_token;
-                    insert_log_messages(MsgNO++, 'Success', 'Got Access Token from LO - '+access_token) ;
-                    resolve(access_token);
+                    }
 ;
                 }
         });
@@ -815,15 +871,16 @@ function insert_log_messages(msg_no_int, msg_type, msg_details)
             }
         };
      
-    dynamodb.putItem(params, function(err, data) {
-
-        if(err)
-        {
-            console.error("Not Inserted to log message table. Error JSON:", JSON.stringify(err, null, 2));
-        }
-
-    });
+        dynamodb.putItem(params, function(err, data) {
+            //console.log("ERROR = "+ err);
+            if(err)
+            {
+                console.log( " Not Inserted to  table ("+ params.TableName+") - ERROR === "+ err+"   PARAMETERE ==="+ JSON.stringify(params));
     
+            }
+            //console.log("DATA = "+ data);
+        });
+        
 }
 
 function getCurrentDateTime() {

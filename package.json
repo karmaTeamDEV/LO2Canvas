@@ -479,6 +479,7 @@
       "resolved": "https://registry.npmjs.org/negotiator/-/negotiator-0.6.1.tgz",
       "version": "0.6.1"
     },
+    "node-redshift": "^0.1.5",
     "oauth-sign": {
       "integrity": "sha1-Rqarfwrq2N6unsBWV4C31O/rnUM=",
       "resolved": "https://registry.npmjs.org/oauth-sign/-/oauth-sign-0.8.2.tgz",

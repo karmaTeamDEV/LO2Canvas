@@ -82,17 +82,17 @@ function get_access_token_LO()
         url: 'https://karma-test.difference-engine.com/oauth2/token?grant_type=client_credentials',
         method: 'POST',
         auth: {
-            user: 'grade-sync',
+            user: 'grade-sync1',
             pass: '3f7s-xnx9ydzm-uhdx'
         },
         form: {
             'grant_type': 'client_credentials'
         }
         }, function(err, res) {
-            console.log("RES = "+ res);
-            console.log("ERR = "+err);
+            console.log("RES = "+ JSON.stringify(res));
+            console.log("ERR = "+res.statusCode);
              var json = res;
-       console.log("Access Token:", json);
+       //console.log("Access Token:", json);
          return json.access_token;
         });
         console.log("App IN FUNCTION END");
